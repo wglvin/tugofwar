@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tug of War Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-slate-100 p-8 font-sans text-slate-800">
+
+    <div class="max-w-4xl mx-auto space-y-8">
+        <h1 class="text-3xl font-bold text-center text-slate-900">Tug of War Tournament Tracker</h1>
+
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-4">Record Match</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div>
+                    <label class="block text-sm font-medium mb-1">Team A</label>
+                    <select id="teamA" class="w-full border rounded p-2 bg-slate-50"></select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1">Result</label>
+                    <select id="score" class="w-full border rounded p-2 bg-slate-50">
+                        <option value="2-0">Team A wins 2-0</option>
+                        <option value="2-1">Team A wins 2-1</option>
+                        <option value="0-2">Team B wins 2-0</option>
+                        <option value="1-2">Team B wins 2-1</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1">Team B</label>
+                    <select id="teamB" class="w-full border rounded p-2 bg-slate-50"></select>
+                </div>
+                <button id="submitMatchBtn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full">
+                    Submit Match
+                </button>
+            </div>
+            <p id="error-msg" class="text-red-500 text-sm mt-2 hidden">Teams cannot play themselves!</p>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-md overflow-x-auto">
+            <h2 class="text-xl font-semibold mb-4">League Table</h2>
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-slate-800 text-white">
+                        <th class="p-3">Rank</th>
+                        <th class="p-3">Team</th>
+                        <th class="p-3">Pld</th>
+                        <th class="p-3">W</th>
+                        <th class="p-3">L</th>
+                        <th class="p-3" title="Pulls Won">PW</th>
+                        <th class="p-3" title="Pulls Lost">PL</th>
+                        <th class="p-3" title="Pull Difference">PD</th>
+                        <th class="p-3">Pts</th>
+                    </tr>
+                </thead>
+                <tbody id="leaderboard" class="divide-y divide-slate-200">
+                    <tr>
+                        <td colspan="9" class="p-4 text-center text-slate-500">Loading standings from database...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, getDocs, serverTimestamp, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        // ==========================================
+        // PASTE YOUR FIREBASE CONFIG OBJECT HERE:
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyAiyyMNWTqLOH7Z4RdWpv8FkPkHZDiobRk",
+            authDomain: "tugofwar-36072.firebaseapp.com",
+            projectId: "tugofwar-36072",
+            storageBucket: "tugofwar-36072.firebasestorage.app",
+            messagingSenderId: "1013346342263",
+            appId: "1:1013346342263:web:9e0954fed83508c96c3d72",
+            measurementId: "G-0R1JH8LBVW"
+        };
+        // ==========================================
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const initialTeams = ["SMU DB 2", "National Junior College (NJC)", "SMU Nang & Gang", "SMU Tug Tug Tug Chuan", "Nanyang Junior College (NYJC)", "SMU DB 1", "SMU Happy Thugs", "SMU DB 3"];
+
+        // Populate Dropdowns
+        function populateDropdowns() {
+            const teamASelect = document.getElementById("teamA");
+            const teamBSelect = document.getElementById("teamB");
+
+            initialTeams.forEach(team => {
+                teamASelect.add(new Option(team, team));
+                teamBSelect.add(new Option(team, team));
+            });
+            teamBSelect.selectedIndex = 1;
+        }
+
+        // Fetch matches and build table
+        async function loadMatches() {
+            let stats = {};
+            initialTeams.forEach(team => {
+                stats[team] = { played: 0, wins: 0, losses: 0, pullsWon: 0, pullsLost: 0, pullDiff: 0, points: 0 };
+            });
+
+            try {
+                // Get all matches from Firestore, ordered by time submitted
+                const q = query(collection(db, "matches"), orderBy("createdAt", "asc"));
+                const querySnapshot = await getDocs(q);
+
+                querySnapshot.forEach((doc) => {
+                    const match = doc.data();
+                    const { teamA, teamB, scoreA, scoreB } = match;
+
+                    stats[teamA].played++;
+                    stats[teamB].played++;
+
+                    if (scoreA > scoreB) {
+                        applyResult(stats, teamA, teamB, scoreA, scoreB);
+                    } else {
+                        applyResult(stats, teamB, teamA, scoreB, scoreA);
+                    }
+                });
+
+                renderTable(stats);
+            } catch (error) {
+                console.error("Error loading matches: ", error);
+                document.getElementById("leaderboard").innerHTML = `<tr><td colspan="9" class="p-4 text-center text-red-500">Error loading database. Check console.</td></tr>`;
+            }
+        }
+
+        function applyResult(stats, winner, loser, winnerPulls, loserPulls) {
+            stats[winner].wins++;
+            stats[winner].points += 3;
+            stats[winner].pullsWon += winnerPulls;
+            stats[winner].pullsLost += loserPulls;
+            stats[winner].pullDiff += (winnerPulls - loserPulls);
+
+            stats[loser].losses++;
+            stats[loser].pullsWon += loserPulls;
+            stats[loser].pullsLost += winnerPulls;
+            stats[loser].pullDiff += (loserPulls - winnerPulls);
+        }
+
+        // Save new match to Firebase
+        async function recordMatch() {
+            const teamA = document.getElementById("teamA").value;
+            const teamB = document.getElementById("teamB").value;
+            const scoreStr = document.getElementById("score").value;
+            const errorMsg = document.getElementById("error-msg");
+            const btn = document.getElementById("submitMatchBtn");
+
+            if (teamA === teamB) {
+                errorMsg.classList.remove("hidden");
+                return;
+            }
+            errorMsg.classList.add("hidden");
+
+            btn.disabled = true;
+            btn.innerText = "Saving...";
+
+            const scores = scoreStr.split('-');
+            const scoreA = parseInt(scores[0]);
+            const scoreB = parseInt(scores[1]);
+
+            try {
+                // Write directly to Firestore
+                await addDoc(collection(db, "matches"), {
+                    teamA: teamA,
+                    teamB: teamB,
+                    scoreA: scoreA,
+                    scoreB: scoreB,
+                    createdAt: serverTimestamp()
+                });
+
+                // Reload the table
+                await loadMatches();
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                alert("Failed to save match.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Submit Match";
+            }
+        }
+
+        function renderTable(stats) {
+            const tbody = document.getElementById("leaderboard");
+            tbody.innerHTML = "";
+
+            const sortedTeams = Object.keys(stats).sort((a, b) => {
+                if (stats[b].points !== stats[a].points) {
+                    return stats[b].points - stats[a].points;
+                }
+                return stats[b].pullDiff - stats[a].pullDiff;
+            });
+
+            sortedTeams.forEach((team, index) => {
+                const s = stats[team];
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td class="p-3 font-bold text-slate-500">${index + 1}</td>
+                    <td class="p-3 font-semibold">${team}</td>
+                    <td class="p-3">${s.played}</td>
+                    <td class="p-3">${s.wins}</td>
+                    <td class="p-3">${s.losses}</td>
+                    <td class="p-3">${s.pullsWon}</td>
+                    <td class="p-3">${s.pullsLost}</td>
+                    <td class="p-3 ${s.pullDiff > 0 ? 'text-green-600 font-bold' : (s.pullDiff < 0 ? 'text-red-600 font-bold' : '')}">${s.pullDiff > 0 ? '+' : ''}${s.pullDiff}</td>
+                    <td class="p-3 font-bold">${s.points}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Event Listeners and Initialization
+        document.getElementById("submitMatchBtn").addEventListener("click", recordMatch);
+        populateDropdowns();
+        loadMatches();
+    </script>
+</body>
+
+</html>
